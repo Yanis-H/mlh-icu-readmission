@@ -113,9 +113,15 @@ Enfin, des variables spécifiques agrégées sur les **24 dernières heures avan
 
 ### Gestion des données manquantes : mécanisme MNAR
 
+Les données manquantes sont l'un des défis majeurs des données de santé. Avant de décider comment les traiter, il est essentiel de comprendre pourquoi elles manquent. En biostatistiques, on distingue trois mécanismes de manquants :
+
+* **MCAR (Missing Completely At Random) :** Les valeurs manquent de façon totalement aléatoire, sans lien avec les données elles-mêmes (ex. : une panne informatique ponctuelle). C'est le cas le plus simple à gérer.
+* **MAR (Missing At Random) :** Les valeurs manquent de façon liée à d'autres variables observées, mais pas à la valeur manquante elle-même (ex. : la fréquence de prescription d'un examen qui diffèrerait selon le sexe du patient).
+* **MNAR (Missing Not At Random) :** Les valeurs manquent en raison de leur propre valeur. C'est le cas le plus difficile et le plus riche en information clinique. Par exemple, un dosage de lactate n'est pas mesuré parce que le patient n'est pas assez grave pour qu'on le prescrive. Le fait que la donnée soit manquante est donc informatif en lui-même.
+
 Dans MIMIC-IV, **une donnée manquante ne signifie pas une mesure perdue, elle signifie qu'un examen n'a pas été prescrit.** Cette distinction fondamentale détermine la stratégie d'imputation (@fig-mnar).
 
-Pour l'albumine (63,7 % manquants), le lactate (38,0 %) et la bilirubine (49,5 %), l'analyse empirique des patterns de co-manquants démontre le mécanisme **MNAR** (*Missing Not At Random*) : 26,2 % des séjours n'ont aucune des trois mesures (patients stables), contre 25,1 % avec les trois mesures (patients en surveillance intensive). Ce pattern symétrique confirme que l'absence d'observation est cliniquement informative et incompatible avec une hypothèse de données manquantes de manière aléatoire (MCAR ou MAR).
+Pour l'albumine (63,7 % manquants), le lactate (38,0 %) et la bilirubine (49,5 %), l'analyse empirique des patterns de co-manquants démontre le mécanisme **MNAR** (*Missing Not At Random*) : 26,2 % des séjours n'ont aucune des trois mesures (patients stables), contre 25,1 % avec les trois mesures (patients en surveillance intensive). Ces résultats confirment sans ambiguïté que le mécanisme de manquants est MNAR : les données manquent en fonction de la gravité du patient, qui est précisément ce que l'on cherche à évaluer. Cela a des conséquences majeures, **L'imputation multiple (MICE) est inadaptée** car elle suppose un mécanisme MAR. Appliquée à des données MNAR, elle introduirait un biais systématique (Sperrin et al., 2020).
 
 ![Patterns de co-manquants albumine/lactate/bilirubine. La symétrie entre "aucune mesurée" (26,2 %) et "toutes mesurées" (25,1 %) confirme empiriquement le mécanisme MNAR.](figures/fig4_comissing_patterns.png){#fig-mnar width=75%}
 
@@ -123,7 +129,26 @@ La stratégie retenue est la **Missing Indicator Method**, dont la validité est
 
 ### Traitement des valeurs aberrantes
 
-Une **winsorisation P1/P99** est calculée sur les valeurs non-manquantes du train fold uniquement et appliquée au fold de validation. Les seuils obtenus sont physiologiquement cohérents : FC P99 = 136 bpm, lactate P99 = 14,4 mmol/L.
+L'exploration des distributions brutes des constantes vitales révèle des valeurs physiologiquement impossibles, typiques des données de monitoring en temps réel où des artefacts de capteurs (déconnexion, mouvement du patient) génèrent du bruit. À titre d'exemple, l'exploration initiale a relevé des fréquences cardiaques à -241 bpm ou des fréquences respiratoires à plus de 1000 rpm.
+
+Pour neutraliser ces artefacts sans détruire la variance naturelle des cas pathologiques extrêmes, une stratégie de **winsorisation aux percentiles P1 et P99** a été appliquée. 
+
+| Variable | Min brut | Max brut | P1 | P99 |
+| :--- | :--- | :--- | :--- | :--- |
+| **Fréquence Cardiaque (bpm)**| -241 | 395 511 | 49 | 136 |
+| **Fréquence Respiratoire (rpm)**| 0 | 7 000 400 | 8 | 37 |
+| **PA Systolique (mmHg)** | -69 | 1 025 100 | 77 | 178 |
+| **SpO2 (%)** | -951 | 9 900 000 | 87 | 100 |
+
+: Écrêtage des valeurs aberrantes extrêmes (artefacts de capteurs) {#tbl-outliers}
+
+### Redondances et corrélations fortes 
+L'exploration des quatre scores de sévérité disponibles dans MIMIC-IV a révélé des redondances importantes mesurées par le coefficient de corrélation de Pearson ($r$).
+* SAPS-II et APSIII sont fortement corrélés ($r = 0,762$), mesurant la même sévérité globale. L'APSIII a donc été exclu.
+* OASIS présente également une forte corrélation avec SAPS-II ($r = 0,699$) et a été écarté du modèle principal.
+* Le duo SOFA / SAPS-II présente une corrélation plus modérée ($r = 0,472$), indiquant qu'ils apportent des informations cliniques complémentaires (le SOFA mesurant la défaillance d'organe spécifique). 
+
+La multicolinéarité résiduelle est problématique pour la régression logistique, rendant les coefficients instables. Cela justifie formellement le choix de la régularisation L1 (Lasso) pour le modèle linéaire de référence, qui procède à une sélection automatique des variables les plus pertinentes.
 
 ## Protocole de validation
 
